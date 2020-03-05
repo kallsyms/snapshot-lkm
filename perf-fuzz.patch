@@ -1,0 +1,1065 @@
+diff --git a/./arch/x86/Kconfig b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/arch/x86/Kconfig
+index 2a1f0ce..2829c3f 100644
+--- a/./arch/x86/Kconfig
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/arch/x86/Kconfig
+@@ -2758,6 +2758,12 @@ config VMD
+ 	  single domain. If you know your system provides one of these and
+ 	  has devices attached to it, say Y; if you are not sure, say N.
+ 
++config SNAPSHOT
++	def_bool y
++
++config SNAPSHOT_DEBUG
++	def_bool n
++
+ source "net/Kconfig"
+ 
+ source "drivers/Kconfig"
+diff --git a/./arch/x86/entry/syscalls/syscall_64.tbl b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/arch/x86/entry/syscalls/syscall_64.tbl
+index e9ce9c7..ffd2ed7 100644
+--- a/./arch/x86/entry/syscalls/syscall_64.tbl
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/arch/x86/entry/syscalls/syscall_64.tbl
+@@ -336,6 +336,9 @@
+ 327	64	preadv2			sys_preadv2
+ 328	64	pwritev2		sys_pwritev2
+ 
++# WEN
++329 common snapshot		sys_snapshot
++
+ #
+ # x32-specific system call numbers start at 512 to avoid cache impact
+ # for native 64-bit operation.
+diff --git a/./fs/file.c b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/fs/file.c
+index 6b1acdf..5f0af55 100644
+--- a/./fs/file.c
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/fs/file.c
+@@ -375,6 +375,10 @@ struct files_struct *dup_fd(struct files_struct *oldf, int *errorp)
+ 
+ 	rcu_assign_pointer(newf->fdt, new_fdt);
+ 
++#ifdef CONFIG_SNAPSHOT
++    newf->snapshot_open_fds = NULL;
++#endif
++
+ 	return newf;
+ 
+ out_release:
+diff --git a/./include/linux/fdtable.h b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/fdtable.h
+index 5295535..c268acd 100644
+--- a/./include/linux/fdtable.h
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/fdtable.h
+@@ -62,6 +62,9 @@ struct files_struct {
+ 	unsigned long open_fds_init[1];
+ 	unsigned long full_fds_bits_init[1];
+ 	struct file __rcu * fd_array[NR_OPEN_DEFAULT];
++#ifdef CONFIG_SNAPSHOT
++	unsigned long *snapshot_open_fds;
++#endif
+ };
+ 
+ struct file_operations;
+diff --git a/./include/linux/mm.h b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/mm.h
+index 277cd39..cc879a8 100644
+--- a/./include/linux/mm.h
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/mm.h
+@@ -24,6 +24,10 @@
+ #include <linux/err.h>
+ #include <linux/page_ref.h>
+ 
++#ifdef CONFIG_SNAPSHOT
++#include <linux/sched.h>
++#endif
++
+ struct mempolicy;
+ struct anon_vma;
+ struct anon_vma_chain;
+@@ -2454,5 +2458,86 @@ void __init setup_nr_node_ids(void);
+ static inline void setup_nr_node_ids(void) {}
+ #endif
+ 
++#ifdef CONFIG_SNAPSHOT
++static inline struct snapshot_page *get_snapshot_page(
++				struct mm_struct *mm, unsigned long page_base) {
++	struct snapshot_page *sp;
++
++	// printk("[WEN] in is_snapshot_page\n");
++	hash_for_each_possible(mm->ss.ss_page, sp, next, page_base) {
++		// printk("[WEN] try hash page: 0x%08lx\n", sp->page_base);
++		if (sp->page_base == page_base)
++			return sp;
++	}		
++
++	return NULL;
++} 
++
++static inline bool is_snapshot_page_none_pte(struct snapshot_page *sp) {
++	return sp->page_prot & SNAPSHOT_NONE_PTE;	
++}
++
++static inline bool is_snapshot_page_cow(struct snapshot_page *sp) {
++	return sp->page_prot & SNAPSHOT_COW;
++}
++
++static inline bool is_snapshot_page_private(struct snapshot_page *sp) {
++	return sp->page_prot & SNAPSHOT_PRIVATE;
++}
++
++static inline void set_snapshot_page_none_pte(struct snapshot_page *sp) {
++	sp->page_prot |= SNAPSHOT_NONE_PTE;
++}
++
++static inline void set_snapshot_page_private(struct snapshot_page *sp) {
++	sp->page_prot |= SNAPSHOT_PRIVATE;
++}
++
++static inline void set_snapshot_page_cow(struct snapshot_page *sp) {
++	sp->page_prot |= SNAPSHOT_COW;
++}
++
++static inline void clear_snapshot(struct mm_struct *mm) {
++	mm->ss.status &= ~SNAPSHOT_MADE;
++}
++
++static inline void set_had_snapshot(struct mm_struct *mm) {
++    mm->ss.status |= SNAPSHOT_HAD; 
++}
++
++static inline void set_snapshot(struct mm_struct *mm) {
++	mm->ss.status |= SNAPSHOT_MADE;
++}	
++
++static inline bool had_snapshot(struct mm_struct *mm) {
++    return !!(mm->ss.status & SNAPSHOT_HAD);
++}
++
++static inline bool have_snapshot(struct mm_struct *mm) {
++	return !!(mm->ss.status & SNAPSHOT_MADE);
++}	
++
++static inline void snapshot_cleanup(struct task_struct *tsk) {
++	struct pt_regs *regs = task_pt_regs(tsk);
++	// printk("current ip: 0x%08lx bp: 0x%08lx sp: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
++	// printk("current ip: 0x%08lx\n", regs->ip);
++	regs->ip = tsk->mm->ss.ucontext->cleanup;
++	// regs->cs = tsk->mm->ss.regs->cs;
++	// regs->sp = tsk->mm->ss.ucontext->sp;
++	// regs->ss = tsk->mm->ss.regs->ss;
++	// regs->bp = tsk->mm->ss.ucontext->bp;
++	// printk("after recover ip: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
++	// printk("after recover ip: 0x%08lx\n", regs->ip);
++}
++
++extern unsigned long zap_pte_range(struct mmu_gather *tlb,
++				struct vm_area_struct *vma, pmd_t *pmd,
++				unsigned long addr, unsigned long end,
++				struct zap_details *details);
++
++extern void clean_snapshot(void);
++
++#endif
++
+ #endif /* __KERNEL__ */
+ #endif /* _LINUX_MM_H */
+diff --git a/./include/linux/mm_types.h b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/mm_types.h
+index 903200f..bc2a0d3 100644
+--- a/./include/linux/mm_types.h
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/mm_types.h
+@@ -16,6 +16,7 @@
+ #include <asm/page.h>
+ #include <asm/mmu.h>
+ 
++
+ #ifndef AT_VECTOR_SIZE_ARCH
+ #define AT_VECTOR_SIZE_ARCH 0
+ #endif
+@@ -360,6 +361,52 @@ struct vm_area_struct {
+ 	struct vm_userfaultfd_ctx vm_userfaultfd_ctx;
+ };
+ 
++#ifdef CONFIG_SNAPSHOT
++#include <linux/hashtable.h>
++
++struct snapshot_vma {
++	unsigned long vm_start;
++	unsigned long vm_end;
++	struct snapshot_vma *vm_next;
++};
++
++struct snapshot_page {
++	unsigned long page_base;
++	unsigned long page_prot;
++	void *page_data;
++
++    bool has_been_copied;
++	bool has_had_pte;
++    bool valid;
++
++	struct hlist_node next;
++};
++
++#define SNAPSHOT_NONE 0x00000000 // outside snapshot
++#define SNAPSHOT_MADE 0x00000001 // in snapshot
++#define SNAPSHOT_HAD  0x00000002 // once had snapshot
++
++#define SNAPSHOT_HASHTABLE_SZ 0x8
++
++struct snapshot_context {
++	unsigned long cleanup;
++	unsigned long sp;
++	unsigned long bp;
++};
++
++struct snapshot {
++	unsigned int status;
++	struct snapshot_context *ucontext;
++	unsigned long oldbrk;
++	struct snapshot_vma *ss_mmap;
++	DECLARE_HASHTABLE(ss_page, SNAPSHOT_HASHTABLE_SZ);
++};
++
++#define SNAPSHOT_PRIVATE 			0x00000001
++#define SNAPSHOT_COW	 			0x00000002
++#define SNAPSHOT_NONE_PTE 			0x00000010
++#endif
++
+ struct core_thread {
+ 	struct task_struct *task;
+ 	struct core_thread *next;
+@@ -518,6 +565,10 @@ struct mm_struct {
+ #ifdef CONFIG_MMU
+ 	struct work_struct async_put_work;
+ #endif
++
++#ifdef CONFIG_SNAPSHOT
++	struct snapshot ss;
++#endif
+ };
+ 
+ static inline void mm_init_cpumask(struct mm_struct *mm)
+diff --git a/./include/linux/syscalls.h b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/syscalls.h
+index d022390..bd3dcde 100644
+--- a/./include/linux/syscalls.h
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/include/linux/syscalls.h
+@@ -833,6 +833,7 @@ asmlinkage long sys_syncfs(int fd);
+ 
+ asmlinkage long sys_fork(void);
+ asmlinkage long sys_vfork(void);
++
+ #ifdef CONFIG_CLONE_BACKWARDS
+ asmlinkage long sys_clone(unsigned long, unsigned long, int __user *, unsigned long,
+ 	       int __user *);
+@@ -899,3 +900,7 @@ asmlinkage long sys_copy_file_range(int fd_in, loff_t __user *off_in,
+ asmlinkage long sys_mlock2(unsigned long start, size_t len, int flags);
+ 
+ #endif
++
++#ifdef CONFIG_SNAPSHOT
++asmlinkage long sys_snapshot(unsigned long option, unsigned long arg);
++#endif
+diff --git a/./kernel/Makefile b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/Makefile
+index e2ec54e..ef750ce 100644
+--- a/./kernel/Makefile
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/Makefile
+@@ -9,7 +9,8 @@ obj-y     = fork.o exec_domain.o panic.o \
+ 	    extable.o params.o \
+ 	    kthread.o sys_ni.o nsproxy.o \
+ 	    notifier.o ksysfs.o cred.o reboot.o \
+-	    async.o range.o smpboot.o
++	    async.o range.o smpboot.o \
++	    snapshot.o
+ 
+ obj-$(CONFIG_MULTIUSER) += groups.o
+ 
+diff --git a/./kernel/exit.c b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/exit.c
+index 091a78b..af3f66a 100644
+--- a/./kernel/exit.c
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/exit.c
+@@ -933,6 +933,13 @@ do_group_exit(int exit_code)
+ 
+ 	BUG_ON(exit_code & 0x80); /* core dumps don't get here */
+ 
++#ifdef CONFIG_SNAPSHOT
++	/* not called directly by exit/_exit from the user OR exit/_exit called outside snapshot*/
++	if (current->mm && had_snapshot(current->mm)) {
++		clean_snapshot();	
++	}
++#endif
++
+ 	if (signal_group_exit(sig))
+ 		exit_code = sig->group_exit_code;
+ 	else if (!thread_group_empty(current)) {
+@@ -961,7 +968,15 @@ do_group_exit(int exit_code)
+  */
+ SYSCALL_DEFINE1(exit_group, int, error_code)
+ {
++#ifdef CONFIG_SNAPSHOT
++	if (current->mm && have_snapshot(current->mm)) {
++		snapshot_cleanup(current);	
++		goto out;
++	}
++#endif
+ 	do_group_exit((error_code & 0xff) << 8);
++
++out:
+ 	/* NOTREACHED */
+ 	return 0;
+ }
+diff --git a/./kernel/fork.c b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/fork.c
+index beb3172..21b2fc6 100644
+--- a/./kernel/fork.c
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/fork.c
+@@ -987,6 +987,12 @@ static struct mm_struct *dup_mm(struct task_struct *tsk)
+ 	mm->hiwater_rss = get_mm_rss(mm);
+ 	mm->hiwater_vm = mm->total_vm;
+ 
++#ifdef CONFIG_SNAPSHOT
++    mm->ss.status = 0;
++    mm->ss.ucontext = NULL;
++    mm->ss.ss_mmap = NULL; 
++#endif
++
+ 	if (mm->binfmt && !try_module_get(mm->binfmt->module))
+ 		goto free_pt;
+ 
+diff --git a/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/snapshot.c b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/snapshot.c
+new file mode 100644
+index 0000000..43df694
+--- /dev/null
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/kernel/snapshot.c
+@@ -0,0 +1,623 @@
++/*
++ *  linux/kernel/pfork.c
++ *
++ *  wxu
++ */
++
++#include <linux/slab.h>
++#include <linux/init.h>
++#include <linux/unistd.h>
++#include <linux/module.h>
++#include <linux/vmalloc.h>
++#include <linux/completion.h>
++#include <linux/personality.h>
++#include <linux/mempolicy.h>
++#include <linux/sem.h>
++#include <linux/file.h>
++#include <linux/fdtable.h>
++#include <linux/iocontext.h>
++#include <linux/key.h>
++#include <linux/binfmts.h>
++#include <linux/mman.h>
++#include <linux/mmu_notifier.h>
++#include <linux/fs.h>
++#include <linux/mm.h>
++#include <linux/vmacache.h>
++#include <linux/nsproxy.h>
++#include <linux/capability.h>
++#include <linux/cpu.h>
++#include <linux/cgroup.h>
++#include <linux/security.h>
++#include <linux/hugetlb.h>
++#include <linux/seccomp.h>
++#include <linux/swap.h>
++#include <linux/syscalls.h>
++#include <linux/jiffies.h>
++#include <linux/futex.h>
++#include <linux/compat.h>
++#include <linux/kthread.h>
++#include <linux/task_io_accounting_ops.h>
++#include <linux/rcupdate.h>
++#include <linux/ptrace.h>
++#include <linux/mount.h>
++#include <linux/audit.h>
++#include <linux/memcontrol.h>
++#include <linux/ftrace.h>
++#include <linux/proc_fs.h>
++#include <linux/profile.h>
++#include <linux/rmap.h>
++#include <linux/ksm.h>
++#include <linux/acct.h>
++#include <linux/tsacct_kern.h>
++#include <linux/cn_proc.h>
++#include <linux/freezer.h>
++#include <linux/delayacct.h>
++#include <linux/taskstats_kern.h>
++#include <linux/random.h>
++#include <linux/tty.h>
++#include <linux/blkdev.h>
++#include <linux/fs_struct.h>
++#include <linux/magic.h>
++#include <linux/perf_event.h>
++#include <linux/posix-timers.h>
++#include <linux/user-return-notifier.h>
++#include <linux/oom.h>
++#include <linux/khugepaged.h>
++#include <linux/signalfd.h>
++#include <linux/uprobes.h>
++#include <linux/aio.h>
++#include <linux/compiler.h>
++#include <linux/sysctl.h>
++#include <linux/kcov.h>
++#include <linux/list.h>
++
++#include <asm/pgtable.h>
++#include <asm/pgtable_types.h>
++#include <asm/pgalloc.h>
++#include <asm/uaccess.h>
++#include <asm/mmu_context.h>
++#include <asm/cacheflush.h>
++#include <asm/tlbflush.h>
++#include <asm/tlb.h>
++
++#ifdef CONFIG_SNAPSHOT
++
++#define SNAPSHOT_START	0x00000000
++#define SNAPSHOT_END	0x00000001
++#define SNAPSHOT_CLEAN  0x00000002
++
++#ifdef CONFIG_SNAPSHOT_DEBUG
++  #define dbg_printk(format, arg...)     \
++    printk(pr_fmt(format), ##arg);
++#else
++  #define dbg_printk(format, arg...) ((void) 0)
++#endif
++
++pmd_t *get_page_pmd(unsigned long addr) {
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd = NULL;
++
++	struct mm_struct *mm = current->mm;
++
++	pgd = pgd_offset(mm, addr);
++	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
++		dbg_printk("[WEN] Invalid pgd.\n");
++		goto out;
++	}
++
++	pud = pud_offset(pgd, addr);
++	if (pud_none(*pud) || pud_bad(*pud)) {
++		dbg_printk("[WEN] Invalid pud.\n");
++		goto out;
++	}
++	
++	pmd = pmd_offset(pud, addr);
++	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
++		dbg_printk("[WEN] Invalid pmd.\n");
++		pmd = NULL;
++		goto out;
++  }
++
++out:
++	return pmd;
++}
++
++pte_t *walk_page_table(unsigned long addr) {
++	pgd_t *pgd;
++	pud_t *pud;
++	pmd_t *pmd;
++	pte_t *ptep = NULL;
++
++	struct mm_struct *mm = current->mm;
++
++	pgd = pgd_offset(mm, addr);
++  	if (pgd_none(*pgd) || pgd_bad(*pgd)) {
++		dbg_printk("[WEN] Invalid pgd.\n");
++		goto out;
++  	}
++
++  	pud = pud_offset(pgd, addr);
++  	if (pud_none(*pud) || pud_bad(*pud)) {
++    	dbg_printk("[WEN] Invalid pud.\n");
++  		goto out;
++  	}
++
++	pmd = pmd_offset(pud, addr);
++	if (pmd_none(*pmd) || pmd_bad(*pmd)) {
++		dbg_printk("[WEN] Invalid pmd.\n");
++		goto out;
++	}
++	
++	ptep = pte_offset_map(pmd, addr);
++	if (!ptep) {
++		dbg_printk("[NEW] Invalid pte.\n");
++    	goto out;
++  	}
++
++out:
++	return ptep;
++}
++
++void munmap_new_vmas(struct mm_struct *mm) {
++	struct vm_area_struct *vma = mm->mmap;
++	struct snapshot_vma *ss_vma = mm->ss.ss_mmap;
++
++	unsigned long old_start = ss_vma->vm_start;
++	unsigned long old_end = ss_vma->vm_end;
++	unsigned long cur_start = vma->vm_start; 
++	unsigned long cur_end = vma->vm_end;
++
++	/* we believe that normally, the original mappings of the father process
++	 * will not be munmapped by the child process when fuzzing.
++	 * 
++	 * load library on-the-fly?
++	 */
++	do {
++		if (cur_start < old_start)
++		{
++			if (old_start >= cur_end) {
++				dbg_printk("[WEN] new: from 0x%08lx to 0x%08lx\n", cur_start, cur_end);
++				vm_munmap(cur_start, cur_end - cur_start);
++				vma = vma->vm_next;
++				if (!vma)
++					break;
++				cur_start = vma->vm_start;
++				cur_end = vma->vm_end;
++			} else {
++				dbg_printk("[WEN] new: from 0x%08lx to 0x%08lx\n", cur_start, old_start);
++				vm_munmap(cur_start, old_start - cur_start);
++				cur_start = old_start;
++			}
++		} else {
++			if (cur_end < old_end) {
++				vma = vma->vm_next;
++				if (!vma)
++					break;
++				cur_start = vma->vm_start;
++				cur_end = vma->vm_end;
++
++				old_start = cur_end;
++			} else if (cur_end == old_end) {
++				vma = vma->vm_next;
++				if (!vma)
++					break;
++				cur_start = vma->vm_start;
++				cur_end = vma->vm_end;
++
++				ss_vma = ss_vma->vm_next;
++				if (!ss_vma)
++					break;
++				old_start = ss_vma->vm_start;
++				old_end = ss_vma->vm_end;
++			} else if (cur_end > old_end) {
++				cur_start = old_end;
++
++				ss_vma = ss_vma->vm_next;
++				if (!ss_vma)	
++					break;
++				old_start = ss_vma->vm_start;
++				old_end = ss_vma->vm_end;
++			}
++		}
++	} while (true);
++
++	if (vma) {
++		dbg_printk("[WEN] new: from 0x%08lx to 0x%08lx\n", cur_start, cur_end);
++		vm_munmap(cur_start, cur_end - cur_start);
++		while (vma->vm_next != NULL) {
++			vma = vma->vm_next;	
++			dbg_printk("[WEN]new: from 0x%08lx to 0x%08lx\n", vma->vm_start, vma->vm_end);
++			vm_munmap(vma->vm_start, vma->vm_end - vma->vm_start);
++		}
++	}
++
++}
++
++void clean_snapshot_vmas(struct mm_struct *mm) {
++	struct snapshot_vma *p = mm->ss.ss_mmap;
++	struct snapshot_vma *q;
++
++	dbg_printk("[WEN] freeing snapshot vmas\n");
++
++	while (p != NULL) {
++		dbg_printk("[WEN] start: 0x%08lx end: 0x%08lx\n", p->vm_start, p->vm_end);
++		q = p;
++		p = p->vm_next;
++		kfree(q);
++	}
++
++	mm->ss.ss_mmap = NULL;
++}
++
++void do_recover_page(struct snapshot_page *sp) {
++	dbg_printk("[WEN] found reserved page: 0x%08lx page_base: 0x%08lx page_prot: 0x%08lx\n", 
++				(unsigned long)sp->page_data, (unsigned long)sp->page_base, sp->page_prot);
++	
++	copy_to_user((void __user *)sp->page_base, 
++								sp->page_data, PAGE_SIZE); 	
++	
++}
++
++void do_recover_none_pte(struct snapshot_page *sp) {
++	struct mm_struct *mm = current->mm;
++	struct mmu_gather tlb;	
++	pmd_t *pmd;
++
++	dbg_printk("[WEN] found none_pte refreshed page_base: 0x%08lx page_prot: 0x%08lx\n",
++				sp->page_base, sp->page_prot);
++
++	/* 1. find pmd of the page */
++	pmd = get_page_pmd(sp->page_base);	
++	if (!pmd) {
++		dbg_printk("[WEN] invalid pmd for page base 0x%08lx\n", sp->page_base);
++		return;
++	}
++
++	/* 2. with the help of zap_pte_range(?) to safely free a page */
++	lru_add_drain(); // ?
++	tlb_gather_mmu(&tlb, mm, sp->page_base, sp->page_base + PAGE_SIZE);
++	zap_pte_range(&tlb, mm->mmap, pmd, sp->page_base, sp->page_base + PAGE_SIZE, NULL);
++	tlb_finish_mmu(&tlb, sp->page_base, sp->page_base + PAGE_SIZE);
++
++	/* check it again? */	
++	/*
++	pte = walk_page_table(sp->page_base);
++	if (!pte) {
++		dbg_printk("[WEN] re-checking addr 0x%08lx fail!\n", sp->page_base); 
++		return;
++	}
++
++	page = pte_page(*pte);
++	dbg_printk("[WEN] re-checking addr: 0x%08lx PTE: 0x%08lx Page: 0x%08lx PageAnon: %d\n", 
++						sp->page_base, pte->pte, (unsigned long)page, 
++						page ? PageAnon(page) : 0);
++	*/
++}
++
++void clean_memory_snapshot(struct mm_struct *mm) {
++	struct snapshot_page *sp;
++	int i;
++
++	hash_for_each(mm->ss.ss_page, i, sp, next) {
++		if (sp->page_data != NULL)
++			kfree(sp->page_data);
++
++		kfree(sp);
++	}
++}
++
++void recover_memory_snapshot(struct mm_struct *mm) {
++	struct snapshot_page *sp, *prev_sp = NULL;
++    	pte_t *pte, entry;
++	int i;
++
++	hash_for_each(mm->ss.ss_page, i, sp, next) {
++
++        if (sp->valid) {
++		    if (sp->has_been_copied) // it has been captured by page fault
++			    do_recover_page(sp);	
++            else if (is_snapshot_page_private(sp)) { // private page that has not been captured
++                pte = walk_page_table(sp->page_base); 
++                if (pte) {
++                    entry = pte_mkwrite(*pte);
++                    set_pte_at(mm, sp->page_base, pte, entry);
++                    __flush_tlb_one(sp->page_base & PAGE_MASK); 
++                }
++            }
++
++		    else if (is_snapshot_page_none_pte(sp) && sp->has_had_pte)
++			    do_recover_none_pte(sp);	
++            sp->valid = false;
++        }
++
++	}		
++}
++
++void recover_brk(struct mm_struct *mm) {
++	if (mm->brk > mm->ss.oldbrk) {
++		sys_brk(mm->ss.oldbrk);	
++	}
++}
++
++inline void init_snapshot(struct mm_struct *mm) {
++    if (!had_snapshot(mm)) {
++        // printk("init snapshot...\n");
++        set_had_snapshot(mm);
++	    hash_init(mm->ss.ss_page);
++    }
++	// multi-threading?
++	set_snapshot(mm);
++	// INIT_LIST_HEAD(&(mm->ss.ss_mmap));
++	mm->ss.ss_mmap = NULL;
++	return;
++}
++
++struct snapshot_page *add_snapshot_page(struct mm_struct *mm, unsigned long page_base) {
++	struct snapshot_page *sp;
++
++    sp = get_snapshot_page(mm, page_base);
++    if (sp == NULL) {
++	    sp = kmalloc(sizeof(struct snapshot_page), GFP_KERNEL);
++        
++            sp->page_base = page_base;
++            sp->page_data = NULL;
++	    hash_add(mm->ss.ss_page, &sp->next, sp->page_base);
++    }
++
++    sp->page_prot = 0;
++    sp->has_been_copied = false;
++    sp->valid = true;
++
++	return sp;
++}
++
++void make_snapshot_page(struct vm_area_struct *vma, unsigned long addr) {
++	pte_t *pte;
++	struct snapshot_page *sp;
++	struct page *page;
++
++	pte = walk_page_table(addr);
++	if (!pte)
++		goto out;
++
++	page = pte_page(*pte);
++	
++	dbg_printk("[WEN] making snapshot: 0x%08lx PTE: 0x%08lx Page: 0x%08lx PageAnon: %d\n", 
++						addr, pte->pte, (unsigned long)page, 
++						page ? PageAnon(page) : 0);
++
++	sp = add_snapshot_page(vma->vm_mm, addr);
++
++	if (pte_none(*pte)) { 
++		/* empty pte */
++        sp->has_had_pte = false;
++		set_snapshot_page_none_pte(sp);
++
++	} else {
++        sp->has_had_pte = true;
++		if (pte_write(*pte)) {
++			/* Private rw page */
++			dbg_printk("[WEN] private writable addr: 0x%08lx\n", addr);
++			ptep_set_wrprotect(vma->vm_mm, addr, pte);
++			set_snapshot_page_private(sp);
++
++			/* flush tlb to make the pte change effective */
++			flush_tlb_page(vma, addr & PAGE_MASK);
++			dbg_printk("[WEN] writable now: %d\n", pte_write(*pte));
++		} else { 
++			/* COW ro page */
++			dbg_printk("[WEN] cow writable addr: 0x%08lx\n", addr);
++			set_snapshot_page_cow(sp);
++		}
++	}
++
++	pte_unmap(pte);
++
++out:
++	return;
++}
++
++void add_snapshot_vma(struct mm_struct *mm, unsigned long start, unsigned long end) {
++	struct snapshot_vma *ss_vma;
++	struct snapshot_vma *p;
++
++	dbg_printk("[WEN] adding snapshot vmas start: 0x%08lx end: 0x%08lx\n", start, end);
++	ss_vma = (struct snapshot_vma *)kmalloc(sizeof(struct snapshot_vma), GFP_ATOMIC);
++	ss_vma->vm_start = start;
++	ss_vma->vm_end = end;
++
++	if (mm->ss.ss_mmap == NULL) {
++		mm->ss.ss_mmap = ss_vma;
++	} else {
++		p = mm->ss.ss_mmap;
++		while (p->vm_next != NULL)
++			p = p->vm_next;
++
++		p->vm_next = ss_vma;
++	}
++	ss_vma->vm_next = NULL;
++}
++
++inline bool is_stack(struct vm_area_struct *vma) {
++	return vma->vm_start <= vma->vm_mm->start_stack 
++		&& vma->vm_end >= vma->vm_mm->start_stack;
++}
++
++void do_memory_snapshot(unsigned long arg) {
++	unsigned long __user *buf = (unsigned long *)arg;
++	struct task_struct *tsk = current;
++	struct mm_struct *mm = tsk->mm;
++	struct vm_area_struct *pvma = mm->mmap;
++	unsigned long addr;
++
++	unsigned long shm_addr = buf[1], shm_size = buf[2];
++
++	dbg_printk("[WEN] shm_addr: 0x%08lx shm_size: 0x%08lx\n", shm_addr, shm_size);
++
++	init_snapshot(mm);
++
++	do {
++		// temporarily store all the vmas
++		add_snapshot_vma(mm, pvma->vm_start, pvma->vm_end);
++
++		/* we only care about writable pages.
++		 * we do not care about all the stack pages (temporarily).
++		 */
++
++		if (pvma->vm_flags & VM_WRITE && !is_stack(pvma) && pvma->vm_start != shm_addr) {
++			dbg_printk("[WEN] make snapshot start: 0x%08lx end: 0x%08lx\n", pvma->vm_start, pvma->vm_end);
++		
++			for (addr = pvma->vm_start; 
++				addr < pvma->vm_end; 
++				addr += PAGE_SIZE) {
++
++				make_snapshot_page(pvma, addr);
++			}
++		}
++
++		pvma = pvma->vm_next;
++
++	} while (pvma != NULL);
++
++	return;
++}
++
++void recover_files_snapshot(void) {
++	/*
++	 * assume the child process will not close any
++	 * father's fd?
++	 */
++
++	struct files_struct *files = current->files;
++	struct fdtable *fdt = rcu_dereference_raw(files->fdt);
++
++	int i, j = 0;
++	for (;;) {
++		unsigned long cur_set, old_set;
++		i = j * BITS_PER_LONG;
++		if (i >= fdt->max_fds)
++			break;
++		cur_set = fdt->open_fds[j];
++		old_set = files->snapshot_open_fds[j++];
++		// dbg_printk("cur_set: 0x%08lx old_set: 0x%08lx\n", cur_set, old_set);
++		while (cur_set) {
++			if (cur_set & 1) {
++				if (!(old_set & 1) 
++						&& fdt->fd[i] != NULL) {
++						struct file *file = fdt->fd[i];
++						dbg_printk("[WEN] find new fds %d file* 0x%08lx\n", i, (unsigned long)file); 
++						// fdt->fd[i] = NULL;
++						// filp_close(file, files);
++						__close_fd(files, i);
++				}
++			}
++
++			i++;
++			cur_set >>= 1;
++			old_set >>= 1;
++		}
++	}
++}
++
++void clean_files_snapshot(void) {
++	struct files_struct *files = current->files;
++
++	if (files->snapshot_open_fds != NULL)
++		kfree(files->snapshot_open_fds);
++
++	files->snapshot_open_fds = NULL;
++}
++
++void do_files_snapshot(void) {
++	struct files_struct *files = current->files;
++	struct fdtable *fdt = rcu_dereference_raw(files->fdt);		
++	int size, i;
++
++	size = (fdt->max_fds - 1) / BITS_PER_LONG + 1; 
++
++    if (files->snapshot_open_fds == NULL)
++	    files->snapshot_open_fds = (unsigned long *)kmalloc(
++												size * sizeof(unsigned long), GFP_ATOMIC);
++
++	for (i = 0; i < size; i++)
++		files->snapshot_open_fds[i] = fdt->open_fds[i];
++}
++
++void reserve_context(unsigned long arg) {
++	unsigned long __user *buf = (unsigned long *)arg;
++    struct snapshot_context *sctx = current->mm->ss.ucontext;
++
++    if (sctx == NULL) {
++	    sctx = (struct snapshot_context *)kmalloc(sizeof(struct snapshot_context), GFP_ATOMIC);
++	    current->mm->ss.ucontext = sctx;
++    }
++
++	sctx->cleanup = buf[0];
++
++}
++
++inline void reserve_brk(void) {
++	struct mm_struct *mm = current->mm;
++	mm->ss.oldbrk = mm->brk;
++}
++
++void clean_context(struct mm_struct *mm) {
++	if (mm->ss.ucontext != NULL)
++		kfree(mm->ss.ucontext);
++	mm->ss.ucontext = NULL;
++}
++
++void make_snapshot(unsigned long arg) {
++	reserve_context(arg);
++	reserve_brk();
++	do_memory_snapshot(arg);
++    do_files_snapshot();
++}
++
++void recover_snapshot(unsigned long arg) {
++	if (have_snapshot(current->mm)) {
++        clear_snapshot(current->mm);
++		recover_memory_snapshot(current->mm);
++		recover_brk(current->mm);
++		munmap_new_vmas(current->mm);
++		clean_snapshot_vmas(current->mm);
++		recover_files_snapshot();
++		// clean_files_snapshot();
++		// clean_context(current->mm);
++		// clear_snapshot(current->mm);
++	}
++}
++
++void clean_snapshot(void) {
++	clean_memory_snapshot(current->mm);
++	clean_snapshot_vmas(current->mm);
++	clean_files_snapshot();
++	clean_context(current->mm);
++	clear_snapshot(current->mm);
++}
++
++#endif
++
++SYSCALL_DEFINE2(snapshot, unsigned long, option, unsigned long, arg)
++{
++
++#ifdef CONFIG_SNAPSHOT
++	dbg_printk("[WEN] in snapshot(%ld)!\n", option);
++	switch (option) {
++		case SNAPSHOT_START:
++			make_snapshot(arg);
++			break;
++		case SNAPSHOT_END:
++			recover_snapshot(arg);
++			break;
++		default:
++			break;
++	}
++#endif
++
++	return 0;
++}
++
++
++
+diff --git a/./mm/memory.c b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/mm/memory.c
+index 793fe0f..334bfc4 100644
+--- a/./mm/memory.c
++++ b/home/nickgregory/dev/snapshot-lkm/perf-fuzz/linux-4.8.10/mm/memory.c
+@@ -1106,7 +1106,7 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
+ 	return ret;
+ }
+ 
+-static unsigned long zap_pte_range(struct mmu_gather *tlb,
++/* static */unsigned long zap_pte_range(struct mmu_gather *tlb,
+ 				struct vm_area_struct *vma, pmd_t *pmd,
+ 				unsigned long addr, unsigned long end,
+ 				struct zap_details *details)
+@@ -2362,6 +2362,64 @@ static int do_wp_page(struct fault_env *fe, pte_t orig_pte)
+ 	struct vm_area_struct *vma = fe->vma;
+ 	struct page *old_page;
+ 
++#ifdef CONFIG_SNAPSHOT
++	struct mm_struct *mm = vma->vm_mm;
++	struct snapshot_page *ss_page = NULL;
++	pte_t entry;
++	char *vfrom;	
++
++	if (have_snapshot(mm))
++		ss_page = get_snapshot_page(mm, fe->address & PAGE_MASK);
++	else
++		goto normal;
++
++	if (!ss_page || !ss_page->valid)
++		/* not a snapshot'ed page */
++		goto normal; 
++
++	/* the page has been copied?
++	 * the page becomes COW page again. we do not need to take care of it.
++	 */
++	if (ss_page->has_been_copied)
++		goto normal;
++
++	/* reserved old page data */
++    if (ss_page->page_data == NULL)
++	    ss_page->page_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
++	old_page = pfn_to_page(pte_pfn(orig_pte));
++	vfrom = kmap_atomic(old_page);
++	memcpy(ss_page->page_data, vfrom, PAGE_SIZE);	
++	kunmap_atomic(vfrom);
++
++    ss_page->has_been_copied = true;
++
++	/* check if it is not COW/demand paging but the private page 
++	 * whose prot is set from rw to ro by snapshot.
++	 */
++	if (is_snapshot_page_private(ss_page)) {
++		// printk("[WEN] page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n", 
++		//		current->comm, fe->address, (unsigned long)fe->pte, orig_pte.pte);
++
++		/* change the page prot back to ro from rw */
++		entry = pte_mkwrite(orig_pte);
++		set_pte_at(mm, fe->address, fe->pte, entry);
++		flush_tlb_page(vma, fe->address & PAGE_MASK);		
++
++		/*
++		printk("[WEN] page_data: 0x%08lx +0xb0: 0x%08lx, pte: 0x%08lx\n", 
++					(unsigned long)(ss_page->page_data),
++					*(unsigned long *)(ss_page->page_data + 0xb0),
++					fe->pte->pte);
++		*/
++
++		pte_unmap_unlock(fe->pte, fe->ptl);
++		return 0;
++	}	
++
++	/* if it is a COW page, kernel will handle everything. */
++#endif
++
++normal:
+ 	old_page = vm_normal_page(vma, fe->address, orig_pte);
+ 	if (!old_page) {
+ 		/*
+@@ -2739,6 +2797,10 @@ static int do_anonymous_page(struct fault_env *fe)
+ 	struct mem_cgroup *memcg;
+ 	struct page *page;
+ 	pte_t entry;
++#ifdef CONFIG_SNAPSHOT
++	struct mm_struct *mm = vma->vm_mm;
++	struct snapshot_page *ss_page = NULL;
++#endif
+ 
+ 	/* File mapping without ->vm_ops ? */
+ 	if (vma->vm_flags & VM_SHARED)
+@@ -2792,6 +2854,23 @@ static int do_anonymous_page(struct fault_env *fe)
+ 	if (mem_cgroup_try_charge(page, vma->vm_mm, GFP_KERNEL, &memcg, false))
+ 		goto oom_free_page;
+ 
++#ifdef CONFIG_SNAPSHOT
++	if (have_snapshot(mm))
++		ss_page = get_snapshot_page(mm, fe->address & PAGE_MASK);
++	else
++		goto normal;
++
++	if (!ss_page || !ss_page->valid)
++		/* not a snapshot'ed page */
++		goto normal;
++
++	// printk("do_anonymous_page address: 0x%08lx\n", fe->address);
++    
++    // HAVE PTE NOW
++	ss_page->has_had_pte = true;
++#endif
++
++normal:
+ 	/*
+ 	 * The memory barrier inside __SetPageUptodate makes sure that
+ 	 * preceeding stores to the page contents become visible before

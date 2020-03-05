@@ -1,0 +1,3 @@
+[submodule "perf-fuzz"]
+	path = perf-fuzz
+	url = https://github.com/sslab-gatech/perf-fuzz
