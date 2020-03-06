@@ -90,8 +90,19 @@
   #define dbg_printk(format, arg...) ((void) 0)
 #endif
 
+
+void (*k_flush_tlb_mm_range)(
+    struct mm_struct *mm, unsigned long start,
+    unsigned long end, unsigned int stride_shift,
+    bool freed_tables);
+
+void (*k_zap_page_range)(
+    struct vm_area_struct *vma, unsigned long start,
+    unsigned long size);
+
 pmd_t *get_page_pmd(unsigned long addr) {
 	pgd_t *pgd;
+    p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd = NULL;
 
@@ -103,7 +114,13 @@ pmd_t *get_page_pmd(unsigned long addr) {
 		goto out;
 	}
 
-	pud = pud_offset(pgd, addr);
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+		dbg_printk("[WEN] Invalid p4d.\n");
+		goto out;
+	}
+
+	pud = pud_offset(p4d, addr);
 	if (pud_none(*pud) || pud_bad(*pud)) {
 		dbg_printk("[WEN] Invalid pud.\n");
 		goto out;
@@ -122,6 +139,7 @@ out:
 
 pte_t *walk_page_table(unsigned long addr) {
 	pgd_t *pgd;
+    p4d_t *p4d;
 	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *ptep = NULL;
@@ -134,7 +152,13 @@ pte_t *walk_page_table(unsigned long addr) {
 		goto out;
   	}
 
-  	pud = pud_offset(pgd, addr);
+	p4d = p4d_offset(pgd, addr);
+	if (p4d_none(*p4d) || p4d_bad(*p4d)) {
+		dbg_printk("[WEN] Invalid p4d.\n");
+		goto out;
+	}
+
+	pud = pud_offset(p4d, addr);
   	if (pud_none(*pud) || pud_bad(*pud)) {
     	dbg_printk("[WEN] Invalid pud.\n");
   		goto out;
@@ -259,23 +283,26 @@ void do_recover_page(struct snapshot_page *sp) {
 void do_recover_none_pte(struct snapshot_page *sp) {
 	struct mm_struct *mm = current->mm;
 	struct mmu_gather tlb;	
-	pmd_t *pmd;
+	/* pmd_t *pmd; */
 
 	dbg_printk("[WEN] found none_pte refreshed page_base: 0x%08lx page_prot: 0x%08lx\n",
 				sp->page_base, sp->page_prot);
 
-	/* 1. find pmd of the page */
-	pmd = get_page_pmd(sp->page_base);	
-	if (!pmd) {
-		dbg_printk("[WEN] invalid pmd for page base 0x%08lx\n", sp->page_base);
-		return;
-	}
+    // ghost
+	/* /1* 1. find pmd of the page *1/ */
+	/* pmd = get_page_pmd(sp->page_base); */	
+	/* if (!pmd) { */
+	/* 	dbg_printk("[WEN] invalid pmd for page base 0x%08lx\n", sp->page_base); */
+	/* 	return; */
+	/* } */
 
-	/* 2. with the help of zap_pte_range(?) to safely free a page */
-	lru_add_drain(); // ?
-	tlb_gather_mmu(&tlb, mm, sp->page_base, sp->page_base + PAGE_SIZE);
-	zap_pte_range(&tlb, mm->mmap, pmd, sp->page_base, sp->page_base + PAGE_SIZE, NULL);
-	tlb_finish_mmu(&tlb, sp->page_base, sp->page_base + PAGE_SIZE);
+	/* /1* 2. with the help of zap_pte_range(?) to safely free a page *1/ */
+	/* lru_add_drain(); // ? */
+	/* tlb_gather_mmu(&tlb, mm, sp->page_base, sp->page_base + PAGE_SIZE); */
+	/* zap_pte_range(&tlb, mm->mmap, pmd, sp->page_base, sp->page_base + PAGE_SIZE, NULL); */
+	/* tlb_finish_mmu(&tlb, sp->page_base, sp->page_base + PAGE_SIZE); */
+    // ghost
+    k_zap_page_range(mm->mmap, sp->page_base, PAGE_SIZE);
 
 	/* check it again? */	
 	/*
@@ -310,30 +337,31 @@ void recover_memory_snapshot(struct mm_data *mdata) {
 	int i;
 
 	hash_for_each(mdata->ss.ss_page, i, sp, next) {
-
         if (sp->valid) {
-		    if (sp->has_been_copied) // it has been captured by page fault
+		    if (sp->has_been_copied) { // it has been captured by page fault
 			    do_recover_page(sp);	
-            else if (is_snapshot_page_private(sp)) { // private page that has not been captured
+            } else if (is_snapshot_page_private(sp)) { // private page that has not been captured
                 pte = walk_page_table(sp->page_base); 
                 if (pte) {
                     entry = pte_mkwrite(*pte);
                     set_pte_at(mdata->mm, sp->page_base, pte, entry);
-                    __flush_tlb_one(sp->page_base & PAGE_MASK); 
+                    // ghost
+                    // __flush_tlb_one(sp->page_base & PAGE_MASK); 
                 }
-            }
-
-		    else if (is_snapshot_page_none_pte(sp) && sp->has_had_pte)
+            } else if (is_snapshot_page_none_pte(sp) && sp->has_had_pte) {
 			    do_recover_none_pte(sp);	
+            }
             sp->valid = false;
         }
-
-	}		
+    }
 }
 
 void recover_brk(struct mm_data *mdata) {
 	if (current->mm->brk > mdata->ss.oldbrk) {
-		sys_brk(mdata->ss.oldbrk);	
+        // ghost: since the memory mappings have been recovered it should be safe to just do this
+        current->mm->brk = mdata->ss.oldbrk;
+		// ghost
+        // sys_brk(mdata->ss.oldbrk);	
 	}
 }
 
@@ -349,6 +377,22 @@ inline void init_snapshot(struct mm_data *mdata) {
 	mdata->ss.ss_mmap = NULL;
 	return;
 }
+
+struct snapshot_page *get_snapshot_page(
+	struct mm_data *mdata,
+    unsigned long page_base)
+{
+	struct snapshot_page *sp;
+
+	// printk("[WEN] in is_snapshot_page\n");
+	hash_for_each_possible(mdata->ss.ss_page, sp, next, page_base) {
+		// printk("[WEN] try hash page: 0x%08lx\n", sp->page_base);
+		if (sp->page_base == page_base)
+			return sp;
+	}		
+
+	return NULL;
+} 
 
 struct snapshot_page *add_snapshot_page(struct mm_data *mdata, unsigned long page_base) {
 	struct snapshot_page *sp;
@@ -400,7 +444,7 @@ void make_snapshot_page(struct vm_area_struct *vma, unsigned long addr) {
 			set_snapshot_page_private(sp);
 
 			/* flush tlb to make the pte change effective */
-			flush_tlb_page(vma, addr & PAGE_MASK);
+            k_flush_tlb_mm_range(vma->vm_mm, addr & PAGE_MASK, (addr & PAGE_MASK) + PAGE_SIZE, PAGE_SHIFT, false);
 			dbg_printk("[WEN] writable now: %d\n", pte_write(*pte));
 		} else { 
 			/* COW ro page */
@@ -491,7 +535,7 @@ void recover_files_snapshot(void) {
     struct files_data *fdata = get_files_data(files);
 
     if (!fdata) {
-        printk(KERN_WARNING "Unable to find files_struct data");
+        printk(KERN_WARNING "Unable to find files_struct data in recover_files_snapshot");
         return;
     }
 
@@ -527,10 +571,10 @@ void recover_files_snapshot(void) {
 
 void clean_files_snapshot(void) {
 	struct files_struct *files = current->files;
-    struct files_data *fdata = get_files_datas(files);
+    struct files_data *fdata = get_files_data(files);
 
     if (!fdata) {
-        printk(KERN_WARNING "Unable to find files_struct data");
+        printk(KERN_WARNING "Unable to find files_struct data in clean_files_snapshot");
         return;
     }
 
@@ -538,6 +582,7 @@ void clean_files_snapshot(void) {
 		kfree(fdata->snapshot_open_fds);
 
     remove_files_data(fdata);
+    kfree(fdata);
 }
 
 void do_files_snapshot(void) {
@@ -583,30 +628,21 @@ void clean_context(struct mm_data *mdata) {
 }
 
 
-static inline void snapshot_cleanup(struct task_struct *tsk) {
-	struct pt_regs *regs = task_pt_regs(tsk);
-
-    struct mm_data *data = get_mm_data(tsk->mm);
-    if (!data) {
-        printk(KERN_WARN "Unable to find mm data in " __func__);
-        return;
-    }
-
-	// printk("current ip: 0x%08lx bp: 0x%08lx sp: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
-	// printk("current ip: 0x%08lx\n", regs->ip);
-	regs->ip = data->ss.ucontext->cleanup;
-	// regs->cs = data->ss.regs->cs;
-	// regs->sp = data->ss.ucontext->sp;
-	// regs->ss = data->ss.regs->ss;
-	// regs->bp = data->ss.ucontext->bp;
-	// printk("after recover ip: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
-	// printk("after recover ip: 0x%08lx\n", regs->ip);
-}
-
 
 /*
- * syscall funcs
+ * module-called funcs
  */
+
+int snapshot_initialize_k_funcs() {
+    k_flush_tlb_mm_range = kallsyms_lookup_name("flush_tlb_mm_range");
+    k_zap_page_range = kallsyms_lookup_name("zap_page_range");
+
+    if (!k_flush_tlb_mm_range || !k_zap_page_range) {
+        return -ENOENT;
+    }
+    return 0;
+}
+
 void make_snapshot(unsigned long arg) {
 	reserve_context(arg);
 	reserve_brk();
@@ -633,6 +669,26 @@ void recover_snapshot(unsigned long arg) {
 	}
 }
 
+void snapshot_cleanup(struct task_struct *tsk) {
+	struct pt_regs *regs = task_pt_regs(tsk);
+
+    struct mm_data *data = get_mm_data(tsk->mm);
+    if (!data) {
+        printk(KERN_WARNING "Unable to find mm data in snapshot_cleanup");
+        return;
+    }
+
+	// printk("current ip: 0x%08lx bp: 0x%08lx sp: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
+	// printk("current ip: 0x%08lx\n", regs->ip);
+	regs->ip = data->ss.ucontext->cleanup;
+	// regs->cs = data->ss.regs->cs;
+	// regs->sp = data->ss.ucontext->sp;
+	// regs->ss = data->ss.regs->ss;
+	// regs->bp = data->ss.ucontext->bp;
+	// printk("after recover ip: 0x%08lx\n", regs->ip, regs->bp, regs->sp);
+	// printk("after recover ip: 0x%08lx\n", regs->ip);
+}
+
 void clean_snapshot(void) {
     struct mm_data *data = get_mm_data(current->mm);
     if (!data) {
@@ -644,4 +700,5 @@ void clean_snapshot(void) {
 	clean_files_snapshot();
 	clean_context(data);
 	clear_snapshot(data);
+    kfree(data);
 }
