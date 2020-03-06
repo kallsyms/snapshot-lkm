@@ -17,11 +17,11 @@ pop %rdx
 pop %rsi
 pop %rdi
 
-test %rax, %rax
+cmpl $0xdeadf00d, %eax
 
-jz out
+je out
 
-# non-zero; skip over the `call wp_page_hook_trampoline` ret address to ret to the hooked functions caller
+# non-"normal"; skip over the `call wp_page_hook_trampoline` ret address to ret to the hooked functions caller
 
 add 8, %rsp
 

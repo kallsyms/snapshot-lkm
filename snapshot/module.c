@@ -65,12 +65,6 @@ asmlinkage int sys_exit_group(struct pt_regs *regs)
     return orig_sct_exit_group(regs);
 }
 
-bool wp_page_hook(struct vm_fault *vmf)
-{
-    printk(KERN_INFO "wp_page_hook: addr=%llx", vmf->address);
-    return 0; // let the normal function run
-}
-
 // hook.S
 asmlinkage void wp_page_hook_trampoline(void);
 

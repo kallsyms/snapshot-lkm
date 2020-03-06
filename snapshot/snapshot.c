@@ -81,6 +81,7 @@
 #include <asm/tlb.h>
 
 #include "associated_data.h"
+#include "hook.h"
 #include "snapshot.h"
 
 #ifdef DEBUG
@@ -627,6 +628,80 @@ void clean_context(struct mm_data *mdata) {
 	mdata->ss.ucontext = NULL;
 }
 
+
+/*
+ * hooks
+ */
+void *wp_page_hook(struct vm_fault *vmf)
+{
+    struct mm_struct *mm = vmf->vma->vm_mm;
+    struct mm_data *data = get_mm_data(mm);
+	struct snapshot_page *ss_page = NULL;
+    struct page *old_page;
+	pte_t entry;
+	char *vfrom;	
+
+	if (data && have_snapshot(data)) {
+		ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
+    } else {
+        return NORMAL;
+    }
+
+	if (!ss_page || !ss_page->valid) {
+		/* not a snapshot'ed page */
+		return NORMAL;
+    }
+
+	/* the page has been copied?
+	 * the page becomes COW page again. we do not need to take care of it.
+	 */
+	if (ss_page->has_been_copied) {
+        return NORMAL;
+    }
+
+	/* reserved old page data */
+    if (ss_page->page_data == NULL) {
+	    ss_page->page_data = kmalloc(PAGE_SIZE, GFP_KERNEL);
+    }
+
+	old_page = pfn_to_page(pte_pfn(vmf->orig_pte));
+	vfrom = kmap_atomic(old_page);
+	memcpy(ss_page->page_data, vfrom, PAGE_SIZE);	
+	kunmap_atomic(vfrom);
+
+    ss_page->has_been_copied = true;
+
+	/* check if it is not COW/demand paging but the private page 
+	 * whose prot is set from rw to ro by snapshot.
+	 */
+	if (is_snapshot_page_private(ss_page)) {
+		// printk("[WEN] page fault! process: %s addr: 0x%08lx ptep: 0x%08lx pte: 0x%08lx\n", 
+		//		current->comm, vmf->address, (unsigned long)vmf->pte, vmf->orig_pte.pte);
+
+		/* change the page prot back to ro from rw */
+		entry = pte_mkwrite(vmf->orig_pte);
+		set_pte_at(mm, vmf->address, vmf->pte, entry);
+        // ghost
+		//flush_tlb_page(vmf->vma, vmf->address & PAGE_MASK);		
+        // ghost
+        unsigned long aligned_addr = vmf->address & PAGE_MASK;
+        k_flush_tlb_mm_range(mm, aligned_addr, aligned_addr + PAGE_SIZE, PAGE_SHIFT, false);
+
+		/*
+		printk("[WEN] page_data: 0x%08lx +0xb0: 0x%08lx, pte: 0x%08lx\n", 
+					(unsigned long)(ss_page->page_data),
+					*(unsigned long *)(ss_page->page_data + 0xb0),
+					vmf->pte->pte);
+		*/
+
+		pte_unmap_unlock(vmf->pte, vmf->ptl);
+
+        // skip original function
+		return 0;
+    }
+
+    return NORMAL;
+}
 
 
 /*
