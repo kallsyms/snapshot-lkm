@@ -632,8 +632,19 @@ void clean_context(struct mm_data *mdata) {
 /*
  * hooks
  */
-void *wp_page_hook(struct vm_fault *vmf)
+static int setup_skip_orig(uint64_t retval, struct pt_regs *regs)
 {
+    uintptr_t retaddr = *(uintptr_t*)regs->sp;
+    regs->sp += sizeof(uintptr_t);
+    regs->ip = retaddr;
+    regs->ax = retval;
+    return 1; // to disable single-stepping
+}
+
+int wp_page_hook(struct kprobe *p, struct pt_regs *regs)
+{
+    struct vm_fault *vmf = regs->di;
+
     struct mm_struct *mm = vmf->vma->vm_mm;
     struct mm_data *data = get_mm_data(mm);
 	struct snapshot_page *ss_page = NULL;
@@ -644,19 +655,19 @@ void *wp_page_hook(struct vm_fault *vmf)
 	if (data && have_snapshot(data)) {
 		ss_page = get_snapshot_page(data, vmf->address & PAGE_MASK);
     } else {
-        return NORMAL;
+        return 0; // continue
     }
 
 	if (!ss_page || !ss_page->valid) {
 		/* not a snapshot'ed page */
-		return NORMAL;
+        return 0; // continue
     }
 
 	/* the page has been copied?
 	 * the page becomes COW page again. we do not need to take care of it.
 	 */
 	if (ss_page->has_been_copied) {
-        return NORMAL;
+        return 0; // continue
     }
 
 	/* reserved old page data */
@@ -697,10 +708,16 @@ void *wp_page_hook(struct vm_fault *vmf)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 
         // skip original function
-		return 0;
+        return setup_skip_orig(0, regs);
     }
 
-    return NORMAL;
+    return 0; // continue
+}
+
+// actually hooking mem_cgroup_try_charge_delay - filter for calls
+int do_anonymous_hook(struct kprobe *p, struct pt_regs *regs)
+{
+    return 0;
 }
 
 

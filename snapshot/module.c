@@ -115,12 +115,6 @@ static void unpatch_syscall_table(void)
 
 static int __init mod_init(void)
 {
-    // helpers
-    if (!init_hooking()) {
-        printk(KERN_ERR "Unable to initialize hooking subsystem");
-        return -ENOENT;
-    }
-
     // syscall_table overwrites
     void **syscall_table = get_syscall_table();
     if (!syscall_table) {
@@ -136,8 +130,15 @@ static int __init mod_init(void)
     _write_cr0(read_cr0() | (1 << 16));
 
     // func hooks
-    if (!try_hook("do_wp_page", &wp_page_hook_trampoline)) {
+    if (!try_hook("do_wp_page", &wp_page_hook)) {
         printk(KERN_ERR "Unable to hook do_wp_page");
+        unpatch_syscall_table();
+        return -ENOENT;
+    }
+
+    if (!try_hook("mem_cgroup_try_charge_delay", &do_anonymous_hook)) {
+        printk(KERN_ERR "Unable to hook mem_cgroup_try_charge_delay");
+        unhook("do_wp_page");
         unpatch_syscall_table();
         return -ENOENT;
     }
@@ -148,6 +149,7 @@ static int __init mod_init(void)
 
 static void __exit mod_exit(void) {
 
+    unhook("mem_cgroup_try_charge_delay");
     unhook("do_wp_page");
     unpatch_syscall_table();
 }

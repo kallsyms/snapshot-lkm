@@ -12,6 +12,7 @@
 #include <linux/uprobes.h>
 #include <linux/page-flags-layout.h>
 #include <linux/workqueue.h>
+#include <linux/kprobes.h>
 #include <asm/page.h>
 #include <asm/mmu.h>
 #include <linux/hashtable.h>
@@ -92,6 +93,9 @@ struct snapshot {
 #define SNAPSHOT_CLEAN  0x00000002
 
 int snapshot_initialize_k_funcs(void);
+
+int wp_page_hook(struct kprobe *p, struct pt_regs *regs);
+int do_anonymous_hook(struct kprobe *p, struct pt_regs *regs);
 
 void make_snapshot(unsigned long arg);
 void recover_snapshot(unsigned long arg);

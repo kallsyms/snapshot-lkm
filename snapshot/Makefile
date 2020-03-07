@@ -1,5 +1,5 @@
 obj-m := snapshotko.o
-snapshotko-objs := associated_data.o snapshot.o hooks.o hook.o module.o
+snapshotko-objs := associated_data.o snapshot.o hook.o module.o
 
 all:
 	make -C $(HOME)/src/linux/ M=$(PWD) modules
