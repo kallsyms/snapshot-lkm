@@ -20,7 +20,7 @@
 
 void *mmm;
 unsigned long a;
-unsigned long snapshot_arg[2];
+unsigned long snapshot_arg[3];
 jmp_buf env;
 
 void procmap() {

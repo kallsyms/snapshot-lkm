@@ -35,3 +35,11 @@ void unhook(const char *func_name)
         }
     }
 }
+
+void unhook_all(void)
+{
+    struct hook *hook = NULL;
+    list_for_each_entry(hook, &hooks, l) {
+        unregister_kprobe(&hook->kp);
+    }
+}

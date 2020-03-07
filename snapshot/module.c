@@ -136,9 +136,9 @@ static int __init mod_init(void)
         return -ENOENT;
     }
 
-    if (!try_hook("mem_cgroup_try_charge_delay", &do_anonymous_hook)) {
+    if (!try_hook("page_add_new_anon_rmap", &do_anonymous_hook)) {
         printk(KERN_ERR "Unable to hook mem_cgroup_try_charge_delay");
-        unhook("do_wp_page");
+        unhook_all();
         unpatch_syscall_table();
         return -ENOENT;
     }
@@ -148,9 +148,7 @@ static int __init mod_init(void)
 }
 
 static void __exit mod_exit(void) {
-
-    unhook("mem_cgroup_try_charge_delay");
-    unhook("do_wp_page");
+    unhook_all();
     unpatch_syscall_table();
 }
 

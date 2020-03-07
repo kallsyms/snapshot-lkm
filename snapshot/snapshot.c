@@ -84,6 +84,7 @@
 #include "hook.h"
 #include "snapshot.h"
 
+#define DEBUG
 #ifdef DEBUG
   #define dbg_printk(format, arg...)     \
     printk(pr_fmt(format), ##arg);
@@ -643,7 +644,7 @@ static int setup_skip_orig(uint64_t retval, struct pt_regs *regs)
 
 int wp_page_hook(struct kprobe *p, struct pt_regs *regs)
 {
-    struct vm_fault *vmf = regs->di;
+    struct vm_fault *vmf = (struct vm_fault *)regs->di;
 
     struct mm_struct *mm = vmf->vma->vm_mm;
     struct mm_data *data = get_mm_data(mm);
@@ -714,9 +715,32 @@ int wp_page_hook(struct kprobe *p, struct pt_regs *regs)
     return 0; // continue
 }
 
-// actually hooking mem_cgroup_try_charge_delay - filter for calls
+// actually hooking page_add_new_anon_rmap, but we really only care about calls from do_anonymous_page
 int do_anonymous_hook(struct kprobe *p, struct pt_regs *regs)
 {
+    struct vm_area_struct *vma = (struct vm_area_struct *)regs->si;
+    unsigned long address = regs->dx;
+
+    struct mm_struct *mm = vma->vm_mm;
+    struct mm_data *data = get_mm_data(mm);
+    struct snapshot_page *ss_page = NULL;
+
+	if (data && have_snapshot(data)) {
+		ss_page = get_snapshot_page(data, address & PAGE_MASK);
+    } else {
+        return 0;
+    }
+
+	if (!ss_page || !ss_page->valid) {
+		/* not a snapshot'ed page */
+        return 0;
+    }
+
+	// printk("do_anonymous_page address: 0x%08lx\n", fe->address);
+    
+    // HAVE PTE NOW
+	ss_page->has_had_pte = true;
+
     return 0;
 }
 
