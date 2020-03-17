@@ -84,7 +84,7 @@
 #include "hook.h"
 #include "snapshot.h"
 
-#define DEBUG
+//#define DEBUG
 #ifdef DEBUG
   #define dbg_printk(format, arg...)     \
     printk(pr_fmt(format), ##arg);
@@ -551,7 +551,7 @@ void recover_files_snapshot(void) {
 			break;
 		cur_set = fdt->open_fds[j];
 		old_set = fdata->snapshot_open_fds[j++];
-		// dbg_printk("cur_set: 0x%08lx old_set: 0x%08lx\n", cur_set, old_set);
+		dbg_printk("cur_set: 0x%08lx old_set: 0x%08lx\n", cur_set, old_set);
 		while (cur_set) {
 			if (cur_set & 1) {
 				if (!(old_set & 1) 
@@ -769,6 +769,7 @@ void make_snapshot(unsigned long arg) {
 void recover_snapshot(unsigned long arg) {
     struct mm_data *data = get_mm_data(current->mm);
     if (!data) {
+        printk(KERN_WARNING "Unable to find mm data in recover_snapshot");
         return;
     }
 

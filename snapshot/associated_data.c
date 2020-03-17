@@ -30,6 +30,7 @@ struct mm_data *ensure_mm_data(const struct mm_struct *mm) {
     data = kmalloc(sizeof(struct mm_data), GFP_KERNEL | __GFP_ZERO);
 
     INIT_LIST_HEAD(&data->l);
+    data->mm = mm;
 
     list_add(&data->l, &mm_datas);
 
@@ -90,6 +91,7 @@ struct files_data *ensure_files_data(const struct files_struct *files) {
     data = kmalloc(sizeof(struct files_data), GFP_KERNEL | __GFP_ZERO);
 
     INIT_LIST_HEAD(&data->l);
+    data->files = files;
 
     list_add(&data->l, &files_datas);
 
