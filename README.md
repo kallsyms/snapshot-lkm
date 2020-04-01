@@ -11,6 +11,4 @@ For original implementation (as a kernel fork/patch), see [https://github.com/ss
 
 * Overwrites `sys_tuxcall` (unused) syscall table entry for the "new" snapshot syscall
 * Overwrites syscall table to intercept `sys_exit_group` (and maybe restore state)
-* Has a hooking library to intercept other functions
-    * [hook.c](./snapshot/hook.c)
-    * The handler callback can return non-zero to have the original function not be run at all
+* Uses kprobes to hook a few kernel-internal functions (see [snapshot/module.c](./snapshot/module.c)) to build and restore snapshot data (see [snapshot/associated_data.c](./snapshot/associated_data.c))
