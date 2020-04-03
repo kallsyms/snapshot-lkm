@@ -633,13 +633,9 @@ void clean_context(struct mm_data *mdata) {
 /*
  * hooks
  */
-static int setup_skip_orig(uint64_t retval, struct pt_regs *regs)
+static long return_0_stub_func(void)
 {
-    uintptr_t retaddr = *(uintptr_t*)regs->sp;
-    regs->sp += sizeof(uintptr_t);
-    regs->ip = retaddr;
-    regs->ax = retval;
-    return 1; // to disable single-stepping
+    return 0;
 }
 
 int wp_page_hook(struct kprobe *p, struct pt_regs *regs)
@@ -709,7 +705,8 @@ int wp_page_hook(struct kprobe *p, struct pt_regs *regs)
 		pte_unmap_unlock(vmf->pte, vmf->ptl);
 
         // skip original function
-        return setup_skip_orig(0, regs);
+        regs->ip = &return_0_stub_func;
+        return 1;
     }
 
     return 0; // continue
