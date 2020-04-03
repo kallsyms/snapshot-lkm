@@ -1,18 +1,20 @@
 #pragma once
 
-#include <linux/list.h>      // list_head
-#include <linux/mm_types.h>  // mm_struct
 #include "snapshot.h"
+#include <linux/list.h>     // list_head
+#include <linux/mm_types.h> // mm_struct
 
 struct mm_data {
-    // what mm is this for?
-    const struct mm_struct *mm;
 
-    // what data we need for that mm
-    struct snapshot ss;
+  // what mm is this for?
+  const struct mm_struct *mm;
 
-    // list helper
-    struct list_head l;
+  // what data we need for that mm
+  struct snapshot ss;
+
+  // list helper
+  struct list_head l;
+
 };
 
 struct mm_data *get_mm_data(const struct mm_struct *mm);
@@ -25,18 +27,20 @@ void set_snapshot(struct mm_data *mm);
 bool have_snapshot(struct mm_data *data);
 bool had_snapshot(struct mm_data *data);
 
-
 struct files_data {
-    // what files_struct is this for?
-    const struct files_struct *files;
 
-    // what data we need for that mm_struct
-    unsigned long *snapshot_open_fds;
+  // what files_struct is this for?
+  const struct files_struct *files;
 
-    // list helper
-    struct list_head l;
+  // what data we need for that mm_struct
+  unsigned long *snapshot_open_fds;
+
+  // list helper
+  struct list_head l;
+
 };
 
 struct files_data *get_files_data(const struct files_struct *files);
 struct files_data *ensure_files_data(const struct files_struct *files);
 void remove_files_data(struct files_data *data);
+
