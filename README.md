@@ -1,5 +1,7 @@
 # snapshot-lkm
 
+**Repo deprecated in favor of the [AFL++ fork](https://github.com/AFLplusplus/AFL-Snapshot-LKM).**
+
 A kernel module that creates a `snapshot()` syscall for fast fuzzing.
 Developed off of kernel `5.4.23`, but since this is a LKM hopefully version doesn't matter (too much).
 
